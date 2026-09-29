@@ -228,6 +228,52 @@ def _filename_from_response(resp, fallback_url: str) -> str:
 
 SYLLABUS_LINK_RE = re.compile(r'<a[^>]+href="([^"]+)"[^>]*>[^<]*syllabus[^<]*</a>', re.IGNORECASE)
 
+GOOGLE_DOC_RE = re.compile(r"docs\.google\.com/document/d/([\w-]+)")
+# The path of an uploaded file as Brightspace's file viewer page embeds it in
+# its script (the iframe that shows the PDF is loaded from JS, not from HTML).
+# Reached either directly ("viewFile.d2lfile/...") or via an intermediate LOR
+# viewer page ("view.d2l?ou=...&loIdentId=...") that embeds this same link.
+VIEW_FILE_RE = re.compile(r"/d2l/lor/viewer/viewFile\.d2lfile/[^'\"\s)<>]+")
+
+
+def _resolve_viewer_page(
+    context: BrowserContext, base_url: str, resp, title: str, notes: list[str] | None = None
+) -> tuple[bytes, str] | None:
+    """Given a successful GET response that might be the real file or an
+    HTML page wrapping it, return the actual file's (bytes, filename): the
+    response as-is if it's already a file, or, if it's HTML, whatever's
+    inside it -- a Google Doc (exported as PDF) or a Brightspace file viewer
+    link (named in the page's script, not in any plain href)."""
+    if "html" not in resp.headers.get("content-type", "").lower():
+        return resp.body(), _filename_from_response(resp, unquote(resp.url))
+
+    doc = GOOGLE_DOC_RE.search(resp.url)
+    if doc:
+        export = context.request.get(f"https://docs.google.com/document/d/{doc.group(1)}/export?format=pdf")
+        body = export.body() if export.status == 200 else b""
+        if body.startswith(b"%PDF"):
+            LOG.debug("Exported Google Doc %s as a PDF (%d bytes).", doc.group(1), len(body))
+            if notes is not None:
+                notes.append("live Google Doc, may differ from that term")
+            return body, _filename_from_response(export, f"{title.replace('/', '-')}.pdf")
+        LOG.debug(
+            "Google Doc export of %s returned HTTP %d (%d bytes, not a PDF).",
+            doc.group(1), export.status, len(body),
+        )
+        return None
+
+    match = VIEW_FILE_RE.search(resp.text())
+    if match:
+        file_url = f"{base_url.rstrip('/')}{match.group(0)}"
+        file_resp = context.request.get(file_url)
+        if file_resp.status == 200:
+            LOG.debug("Downloaded viewer file %s (%d bytes).", file_url, len(file_resp.body()))
+            return file_resp.body(), _filename_from_response(file_resp, unquote(file_url))
+        LOG.debug("Viewer file %s returned HTTP %d.", file_url, file_resp.status)
+    else:
+        LOG.debug("%r's page is HTML with no Google Doc or viewer file in it.", title)
+    return None
+
 
 def _iter_module_descriptions(modules: list[dict], parents: tuple[str, ...] = ()):
     """Yield (module path, description HTML) for every module that has a
@@ -242,17 +288,25 @@ def _iter_module_descriptions(modules: list[dict], parents: tuple[str, ...] = ()
         yield from _iter_module_descriptions(module.get("Modules", []) or [], path)
 
 
-def _download_syllabus_href(context: BrowserContext, base_url: str, href: str) -> tuple[bytes, str] | None:
-    """Download the file a syllabus link points at (relative or absolute)."""
+def _download_syllabus_href(
+    context: BrowserContext, base_url: str, href: str, notes: list[str] | None = None
+) -> tuple[bytes, str] | None:
+    """Download the file a syllabus link points at (relative or absolute),
+    unwrapping it first if the link actually leads to an HTML viewer page
+    (a Brightspace LOR viewer or a Google Doc) rather than the file itself."""
     href = unescape(href)
     file_url = href if href.startswith("http") else f"{base_url.rstrip('/')}{href}"
     try:
         file_resp = context.request.get(file_url)
-        if file_resp.status == 200:
-            filename = _filename_from_response(file_resp, unquote(file_url))
-            LOG.debug("Downloaded syllabus %r (%d bytes) from %s", filename, len(file_resp.body()), file_url)
-            return file_resp.body(), filename
-        LOG.debug("Fetching syllabus file %r returned HTTP %d.", file_url, file_resp.status)
+        if file_resp.status != 200:
+            LOG.debug("Fetching syllabus file %r returned HTTP %d.", file_url, file_resp.status)
+            return None
+        result = _resolve_viewer_page(context, base_url, file_resp, "syllabus", notes)
+        if result:
+            LOG.debug("Downloaded syllabus %r (%d bytes) from %s", result[1], len(result[0]), file_url)
+        else:
+            LOG.debug("Syllabus link %r led to an HTML page with no file in it.", file_url)
+        return result
     except Exception:  # noqa: BLE001 - best-effort
         LOG.debug("Fetching syllabus file %r failed.", file_url, exc_info=True)
     return None
@@ -347,9 +401,13 @@ def find_syllabus_via_api(
         if not match:
             continue
         LOG.debug("Module %r's description links to a syllabus: %s", module_path, match.group(1))
-        result = _download_syllabus_href(context, base_url, match.group(1))
+        source_notes = []
+        result = _download_syllabus_href(context, base_url, match.group(1), source_notes)
         if result:
+            _source_note[org_unit_id] = "; ".join(source_notes)
             LOG.info("Syllabus is a link in the description of the module %r.", module_path)
+            if source_notes:
+                LOG.info("Note: %s.", "; ".join(source_notes))
             return result
 
     # Slower path: a syllabus link buried inside a content page's body --
@@ -402,9 +460,13 @@ def find_syllabus_via_api(
             )
             continue
         LOG.debug("Syllabus link found in topic %r: %s", topic.get("Title"), match.group(1))
-        result = _download_syllabus_href(context, base_url, match.group(1))
+        source_notes = []
+        result = _download_syllabus_href(context, base_url, match.group(1), source_notes)
         if result:
+            _source_note[org_unit_id] = "; ".join(source_notes)
             LOG.info("Syllabus is a link inside the topic %r (in %r).", topic.get("Title"), topic.get("ModulePath"))
+            if source_notes:
+                LOG.info("Note: %s.", "; ".join(source_notes))
             return result
 
     if undownloadable:
@@ -441,19 +503,11 @@ def _fetch_topic_file(
         return None
 
 
-GOOGLE_DOC_RE = re.compile(r"docs\.google\.com/document/d/([\w-]+)")
-# The path of an uploaded file as Brightspace's file viewer page embeds it in
-# its script (the iframe that shows the PDF is loaded from JS, not from HTML).
-VIEW_FILE_RE = re.compile(r"/d2l/lor/viewer/viewFile\.d2lfile/[^'\"\s)<>]+")
-
-
 def _download_from_topic_url(
     context: BrowserContext, base_url: str, topic: dict, notes: list[str] | None = None
 ) -> tuple[bytes, str] | None:
     """For a topic that isn't an uploaded file (so its /file endpoint 404s),
-    follow its Url and pull the document out of what that points at: a
-    Google Doc (exported as PDF), or a Brightspace file viewer page (whose
-    script names the file's path)."""
+    follow its Url and pull the document out of what that points at."""
     title = topic.get("Title") or "syllabus"
     url = topic.get("Url")
     if not url:
@@ -465,35 +519,10 @@ def _download_from_topic_url(
         if resp.status != 200:
             LOG.debug("Following topic %r (%s) returned HTTP %d.", title, full_url, resp.status)
             return None
-        if "html" not in resp.headers.get("content-type", "").lower():
-            # The Url is the file itself.
-            return resp.body(), _filename_from_response(resp, unquote(resp.url))
-
-        doc = GOOGLE_DOC_RE.search(resp.url) or GOOGLE_DOC_RE.search(full_url)
-        if doc:
-            export = context.request.get(f"https://docs.google.com/document/d/{doc.group(1)}/export?format=pdf")
-            body = export.body() if export.status == 200 else b""
-            if body.startswith(b"%PDF"):
-                LOG.debug("Exported Google Doc %s as a PDF (%d bytes).", doc.group(1), len(body))
-                if notes is not None:
-                    notes.append("live Google Doc, may differ from that term")
-                return body, _filename_from_response(export, f"{title.replace('/', '-')}.pdf")
-            LOG.debug(
-                "Google Doc export of %s returned HTTP %d (%d bytes, not a PDF).",
-                doc.group(1), export.status, len(body),
-            )
-            return None
-
-        match = VIEW_FILE_RE.search(resp.text())
-        if match:
-            file_url = f"{base_url.rstrip('/')}{match.group(0)}"
-            file_resp = context.request.get(file_url)
-            if file_resp.status == 200:
-                LOG.debug("Downloaded viewer file %s (%d bytes).", file_url, len(file_resp.body()))
-                return file_resp.body(), _filename_from_response(file_resp, unquote(file_url))
-            LOG.debug("Viewer file %s returned HTTP %d.", file_url, file_resp.status)
-        else:
+        result = _resolve_viewer_page(context, base_url, resp, title, notes)
+        if not result:
             LOG.debug("Topic %r's page names no Google Doc or viewer file.", title)
+        return result
     except Exception:  # noqa: BLE001 - best-effort
         LOG.debug("Following topic %r (%s) raised an exception.", title, full_url, exc_info=True)
     return None
