@@ -722,8 +722,11 @@ def find_default_course_candidates(
     # into more digits ("ABCD 1234" is not "ABCD_12345").
     this_course = re.compile(rf"(?<![A-Za-z]){bare.group(1)}[\s_-]*{bare.group(2)}(?!\d)", re.IGNORECASE)
     # "_FX_" marks an extension/satellite-site section, not the offering a
-    # bare code should default to.
-    excluded = re.compile(r"DNU|_OLD|DO NOT USE|(?:^|_)FX(?:_|$)", re.IGNORECASE)
+    # bare code should default to. "_NX_" is the same thing under this
+    # school's older naming -- e.g. PMIN 4113 has both
+    # "2019_US_PMIN_4113_40_NX_BSIDE" and "2021_US_PMIN_4113_41_FX_BSIDE" for
+    # the same off-campus site ("BSIDE"), just different years' codes.
+    excluded = re.compile(r"DNU|_OLD|DO NOT USE|(?:^|_)(?:FX|NX)(?:_|$)", re.IGNORECASE)
     sections = [
         (org_unit_id, code)
         for org_unit_id, code, name in enrollments
