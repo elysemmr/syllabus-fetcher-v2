@@ -4,3 +4,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Scratch/output from ad-hoc test runs -- not part of the project.
+64734.txt
+requester_test.txt
+run_log.txt
+fetch_syllabi (1).py
