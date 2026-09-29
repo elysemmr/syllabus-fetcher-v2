@@ -226,7 +226,14 @@ def _filename_from_response(resp, fallback_url: str) -> str:
     return Path(fallback_url.split("?")[0]).name or "syllabus.pdf"
 
 
-SYLLABUS_LINK_RE = re.compile(r'<a[^>]+href="([^"]+)"[^>]*>[^<]*syllabus[^<]*</a>', re.IGNORECASE)
+# The link text often wraps "syllabus" in another tag rather than holding it
+# directly ("<a href=...><span>Course Syllabus</span></a>"), so allow any
+# tags in between, not just plain text -- just don't cross into the next
+# <a>...</a> pair (the lazy match stops at the first </a> it reaches).
+SYLLABUS_LINK_RE = re.compile(
+    r'<a\b[^>]*\bhref="([^"]+)"[^>]*>(?:(?!</a>).)*?syllabus(?:(?!</a>).)*?</a>',
+    re.IGNORECASE | re.DOTALL,
+)
 
 GOOGLE_DOC_RE = re.compile(r"docs\.google\.com/document/d/([\w-]+)")
 # The path of an uploaded file as Brightspace's file viewer page embeds it in
@@ -1009,10 +1016,18 @@ def wait_for_login(page: Page, home_url_fragment: str) -> None:
         page.wait_for_url(f"**{home_url_fragment}**", timeout=LOGIN_TIMEOUT_MS)
         LOG.info("Login detected, continuing.")
     except PlaywrightTimeoutError:
-        input(
-            "Didn't detect the post-login page automatically. If you're already "
-            "logged in, press Enter here to continue (or Ctrl+C to abort): "
-        )
+        try:
+            input(
+                "Didn't detect the post-login page automatically. If you're already "
+                "logged in, press Enter here to continue (or Ctrl+C to abort): "
+            )
+        except EOFError:
+            LOG.error(
+                "Login wasn't completed within %d minutes and there's no terminal to ask for help "
+                "(e.g. this is a background/unattended run). Log in and run again.",
+                LOGIN_TIMEOUT_MS // 60000,
+            )
+            sys.exit(1)
 
 
 def open_course(page: Page, course_code: str, base_url: str, api_versions: dict[str, str]) -> None:
