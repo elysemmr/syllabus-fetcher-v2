@@ -20,9 +20,22 @@ echo "Installing dependencies..."
 .venv/bin/python -m pip install -r requirements.txt -q
 if [ $? -ne 0 ]; then
     echo
-    echo "Installing dependencies failed. Check the error above."
-    read -p "Press Enter to close this window..."
-    exit 1
+    echo "Some dependencies failed to install (often docx2pdf's Mac dependency,"
+    echo "appscript, which needs a C compiler and can fail to build on newer"
+    echo "macOS/Python combos). Retrying without docx2pdf so the rest of setup can"
+    echo "finish -- PDF conversion just won't be available; syllabi will still"
+    echo "download, left in their original file format."
+    FALLBACK_REQS="$(mktemp)"
+    grep -v '^docx2pdf' requirements.txt > "$FALLBACK_REQS"
+    .venv/bin/python -m pip install -r "$FALLBACK_REQS" -q
+    FALLBACK_STATUS=$?
+    rm -f "$FALLBACK_REQS"
+    if [ $FALLBACK_STATUS -ne 0 ]; then
+        echo
+        echo "Installing dependencies failed. Check the error above."
+        read -p "Press Enter to close this window..."
+        exit 1
+    fi
 fi
 
 echo
