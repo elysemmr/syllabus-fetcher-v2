@@ -135,8 +135,10 @@ meant. With no terminal to ask (e.g. a background run) it won't guess -- the
 enrollment data doesn't say which section they took -- so that entry fails and
 lists the candidates; put the year in the entry (`2024 PSYC 3063`) to pick one.
 `--guess-newest` opts in to taking the newest, flagged as a guess in the
-summary. A real student's log normally holds only their own section(s), so
-this mostly comes up with staff/admin accounts, who are enrolled everywhere.
+summary. The enrollment log only includes courses where the person's role is
+a student one (TA, instructor, and admin-type roles on a course are
+excluded), so this mostly comes up when someone retook a course or is
+enrolled in more than one section of it in the same or different terms.
 
 If an entry matches nothing in their log at all, it falls back to the course's
 master course: the bare course code from the entry plus `ON MC` (`PSYC 4063`

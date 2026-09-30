@@ -590,9 +590,14 @@ def find_user_id_by_username(context: BrowserContext, base_url: str, lp_version:
 
 
 def get_user_enrollments(context: BrowserContext, base_url: str, lp_version: str, user_id: int) -> list[dict]:
-    """Fetch every course (org unit) a given user is enrolled in, as a list
-    of {"Id", "Code", "Name"} dicts, via the admin-level enrollments API."""
+    """Fetch every course (org unit) a given user is enrolled in *as a
+    student*, as a list of {"Id", "Code", "Name"} dicts, via the
+    admin-level enrollments API. Each enrollment also carries a Role (e.g.
+    "Student", "TA", "Administrator Dev"); non-student roles are excluded
+    so an account with elevated access on a course (TA, instructor, admin)
+    doesn't get matched as if the person had taken it themselves."""
     enrollments: list[dict] = []
+    skipped_non_student = 0
     bookmark: str | None = None
     for page_num in range(500):  # safety cap on pagination
         params = {"orgUnitTypeId": "3"}  # course offerings only, not departments/semesters/templates
@@ -614,23 +619,28 @@ def get_user_enrollments(context: BrowserContext, base_url: str, lp_version: str
             LOG.debug("Enrollment fetch for user %s failed.", user_id, exc_info=True)
             break
 
-        if page_num == 0 and data.get("Items"):
-            # One-off dump so we can see whether this API response carries a
-            # role field per enrollment (needed to filter out non-student
-            # roles like TA/admin) -- remove once that's settled.
-            LOG.debug("Sample enrollment item shape: %s", json.dumps(data["Items"][0], indent=2))
-
         for item in data.get("Items", []):
             org_unit = item.get("OrgUnit") or {}
-            if org_unit.get("Id"):
-                enrollments.append(org_unit)
+            if not org_unit.get("Id"):
+                continue
+            role_name = (item.get("Role") or {}).get("Name") or ""
+            if role_name and "student" not in role_name.lower():
+                skipped_non_student += 1
+                LOG.debug(
+                    "Skipping %s for user %s: role is %r, not a student role.",
+                    org_unit.get("Code") or org_unit.get("Id"), user_id, role_name,
+                )
+                continue
+            enrollments.append(org_unit)
 
         paging = data.get("PagingInfo") or {}
         if not paging.get("HasMoreItems"):
             break
         bookmark = paging.get("Bookmark")
 
-    LOG.debug("Fetched %d course enrollments for user %s.", len(enrollments), user_id)
+    if skipped_non_student:
+        LOG.debug("Skipped %d non-student-role enrollment(s) for user %s.", skipped_non_student, user_id)
+    LOG.debug("Fetched %d student course enrollments for user %s.", len(enrollments), user_id)
     return enrollments
 
 
