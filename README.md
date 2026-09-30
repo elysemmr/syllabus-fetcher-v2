@@ -56,6 +56,13 @@ other settings, edit `config.json` directly (copy `config.example.json` to
 - `home_url_fragment` — a substring of the URL Brightspace lands you on once
   login succeeds (default `/d2l/home`). Used to detect that login finished.
 - `output_dir` — optional; defaults to `~/Desktop/Syllabi` if left `null`.
+- `student_role_id` — optional, only used by `--requester`. Speeds up
+  looking up someone's enrollment log by asking Brightspace to only return
+  their student-role courses server-side, instead of fetching every course
+  they have any role on (slow for admin/staff accounts). Leave `null` to
+  find it out: run once, and if it's unset the log prints a tip suggesting
+  a value based on the roles it actually saw among the account's student
+  enrollments -- paste that number in.
 
 ## Usage
 

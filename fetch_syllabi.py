@@ -589,18 +589,31 @@ def find_user_id_by_username(context: BrowserContext, base_url: str, lp_version:
     return user_id
 
 
-def get_user_enrollments(context: BrowserContext, base_url: str, lp_version: str, user_id: int) -> list[dict]:
+def get_user_enrollments(
+    context: BrowserContext,
+    base_url: str,
+    lp_version: str,
+    user_id: int,
+    student_role_id: int | None = None,
+) -> list[dict]:
     """Fetch every course (org unit) a given user is enrolled in *as a
     student*, as a list of {"Id", "Code", "Name"} dicts, via the
     admin-level enrollments API. Each enrollment also carries a Role (e.g.
-    "Student", "TA", "Administrator Dev"); non-student roles are excluded
-    so an account with elevated access on a course (TA, instructor, admin)
-    doesn't get matched as if the person had taken it themselves."""
+    "Student", "TA", "Administrator Dev").
+
+    If student_role_id is given (see config.json's student_role_id), the
+    API itself is asked to only return that role, which is much faster for
+    an account with access to many/all courses (e.g. an admin account) --
+    otherwise every enrollment has to be fetched and filtered by role name
+    here instead, which means paging through all of them."""
     enrollments: list[dict] = []
     skipped_non_student = 0
+    seen_roles: dict[int, str] = {}
     bookmark: str | None = None
     for page_num in range(500):  # safety cap on pagination
         params = {"orgUnitTypeId": "3"}  # course offerings only, not departments/semesters/templates
+        if student_role_id is not None:
+            params["roleId"] = str(student_role_id)
         if bookmark:
             params["bookmark"] = bookmark
         try:
@@ -623,14 +636,20 @@ def get_user_enrollments(context: BrowserContext, base_url: str, lp_version: str
             org_unit = item.get("OrgUnit") or {}
             if not org_unit.get("Id"):
                 continue
-            role_name = (item.get("Role") or {}).get("Name") or ""
-            if role_name and "student" not in role_name.lower():
+            role = item.get("Role") or {}
+            role_name = role.get("Name") or ""
+            is_student_role = "student" in role_name.lower()
+            # The server already filtered by role when student_role_id was
+            # given, so only re-check the role name as a safety net here.
+            if student_role_id is None and role_name and not is_student_role:
                 skipped_non_student += 1
                 LOG.debug(
                     "Skipping %s for user %s: role is %r, not a student role.",
                     org_unit.get("Code") or org_unit.get("Id"), user_id, role_name,
                 )
                 continue
+            if is_student_role and role.get("Id") is not None:
+                seen_roles[role["Id"]] = role_name
             enrollments.append(org_unit)
 
         paging = data.get("PagingInfo") or {}
@@ -640,6 +659,12 @@ def get_user_enrollments(context: BrowserContext, base_url: str, lp_version: str
 
     if skipped_non_student:
         LOG.debug("Skipped %d non-student-role enrollment(s) for user %s.", skipped_non_student, user_id)
+    if student_role_id is None and seen_roles:
+        LOG.info(
+            "Tip: add \"student_role_id\": %s to config.json to skip scanning every course next time "
+            "(role id -> name seen among this account's student enrollments: %s).",
+            next(iter(seen_roles)), seen_roles,
+        )
     LOG.debug("Fetched %d student course enrollments for user %s.", len(enrollments), user_id)
     return enrollments
 
@@ -884,6 +909,7 @@ def run_for_requester(
     output_dir: Path,
     allow_other_sections: bool = False,
     guess_newest: bool = False,
+    student_role_id: int | None = None,
 ) -> dict[str, str]:
     """Resolve a batch of loosely-formatted course descriptions against a
     specific person's real enrollment log (by username), then download each
@@ -902,7 +928,7 @@ def run_for_requester(
         LOG.error("Couldn't find a Brightspace user with username %r.", username)
         return {d: f"FAILED: user {username!r} not found" for d in descriptions}
 
-    enrollments = get_user_enrollments(context, base_url, lp_version, user_id)
+    enrollments = get_user_enrollments(context, base_url, lp_version, user_id, student_role_id)
     LOG.info("Found %d courses in %s's enrollment log.", len(enrollments), username)
     if not enrollments:
         return {d: f"FAILED: no enrollments found for {username!r}" for d in descriptions}
@@ -1534,6 +1560,7 @@ def main(argv: list[str] | None = None) -> int:
                 context, config["base_url"], api_versions, args.requester, course_codes, output_dir,
                 allow_other_sections=args.allow_other_sections,
                 guess_newest=args.guess_newest,
+                student_role_id=config.get("student_role_id"),
             )
         else:
             for course_code in course_codes:
