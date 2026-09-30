@@ -29,11 +29,17 @@ The script drives your actual installed Google Chrome (via Playwright's
 `channel="chrome"`), not a separate downloaded browser, so make sure Chrome
 is installed and there's nothing else to fetch for it.
 
-PDF conversion drives Microsoft Word itself (via the `docx2pdf` package
-already in requirements.txt), so no extra software to install — just make
-sure Word is installed and not blocked by a dialog box when the script runs.
-Windows and macOS only. If Word isn't available, the script still downloads
-the file but leaves it in its original format and warns you.
+PDF conversion drives Microsoft Word itself, so no extra software to
+install — just make sure Word is installed and not blocked by a dialog box
+when the script runs. Windows and macOS only. If Word isn't available, the
+script still downloads the file but leaves it in its original format and
+warns you.
+
+On Windows this goes through the `docx2pdf` package (in requirements.txt).
+On Mac it drives Word directly via AppleScript instead, since `docx2pdf`'s
+Mac dependency (`appscript`) is unmaintained and often fails to build
+against current Python/macOS versions — `requirements.txt` only pulls in
+`docx2pdf` on Windows for that reason.
 
 The first time you run the script, if `config.json` doesn't exist yet or has
 no login URL saved, a small popup asks for your MyFire/Brightspace login URL

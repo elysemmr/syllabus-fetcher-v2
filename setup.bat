@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 cd /d "%~dp0"
 
 if not exist .venv (
@@ -21,21 +21,9 @@ echo Installing dependencies...
 .venv\Scripts\python.exe -m pip install -r requirements.txt -q
 if errorlevel 1 (
     echo.
-    echo Some dependencies failed to install ^(sometimes docx2pdf's pywin32
-    echo dependency, which can fail to build on some Windows/Python combos^).
-    echo Retrying without docx2pdf so the rest of setup can finish -- PDF
-    echo conversion just won't be available; syllabi will still download, left
-    echo in their original file format.
-    findstr /v /b /i "docx2pdf" requirements.txt > requirements-fallback.tmp
-    .venv\Scripts\python.exe -m pip install -r requirements-fallback.tmp -q
-    set "FALLBACK_STATUS=!errorlevel!"
-    del requirements-fallback.tmp
-    if not "!FALLBACK_STATUS!"=="0" (
-        echo.
-        echo Installing dependencies failed. Check the error above.
-        pause
-        exit /b 1
-    )
+    echo Installing dependencies failed. Check the error above.
+    pause
+    exit /b 1
 )
 
 echo.

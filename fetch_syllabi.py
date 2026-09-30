@@ -26,7 +26,9 @@ import argparse
 import json
 import logging
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from html import unescape
@@ -1272,12 +1274,48 @@ def save_bytes(data: bytes, suggested_filename: str, output_dir: Path, course_co
     return target
 
 
+_WORD_TO_PDF_APPLESCRIPT = """
+on run argv
+    set inputPath to item 1 of argv
+    set outputPath to item 2 of argv
+    tell application "Microsoft Word"
+        set theDoc to open (POSIX file inputPath)
+        save as theDoc file name outputPath file format format PDF
+        close theDoc saving no
+    end tell
+end run
+"""
+
+
+def _convert_via_word_mac(src: Path, dst: Path) -> None:
+    """Convert src to dst by driving Word through AppleScript (osascript).
+
+    docx2pdf's Mac dependency, appscript, is an unmaintained package that
+    often fails to build against current Python/macOS versions. osascript
+    ships with macOS and needs no compiled extension, so this sidesteps
+    that failure mode entirely.
+    """
+    with tempfile.NamedTemporaryFile("w", suffix=".applescript", delete=False) as f:
+        f.write(_WORD_TO_PDF_APPLESCRIPT)
+        script_path = f.name
+    try:
+        subprocess.run(
+            ["osascript", script_path, str(src), str(dst)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        Path(script_path).unlink(missing_ok=True)
+
+
 def ensure_pdf(path: Path) -> Path:
     """Convert a downloaded file to PDF in place, if it isn't one already.
 
-    Drives Microsoft Word itself (via the docx2pdf package) to do the
-    conversion, so no extra software beyond Word is required. Windows and
-    macOS only, and Word must be installed.
+    Drives Microsoft Word itself to do the conversion, so no extra software
+    beyond Word is required. Windows and macOS only, and Word must be
+    installed. On Windows this goes through the docx2pdf package; on Mac it
+    drives Word directly via AppleScript (see _convert_via_word_mac).
     """
     if path.suffix.lower() == ".pdf":
         return path
@@ -1289,27 +1327,39 @@ def ensure_pdf(path: Path) -> Path:
         )
         return path
 
-    try:
-        from docx2pdf import convert
-    except ImportError:
-        LOG.warning(
-            "docx2pdf isn't installed (pip install docx2pdf), so %s couldn't be "
-            "converted to PDF.",
-            path.name,
-        )
-        return path
-
     pdf_path = path.with_suffix(".pdf")
-    try:
-        convert(str(path), str(pdf_path))
-    except Exception as exc:  # noqa: BLE001 - docx2pdf raises platform-specific errors
-        LOG.warning(
-            "Word couldn't convert %s to PDF (%s). Make sure Microsoft Word is "
-            "installed and not blocked by a dialog box. Leaving original file.",
-            path.name,
-            exc,
-        )
-        return path
+
+    if sys.platform == "darwin":
+        try:
+            _convert_via_word_mac(path, pdf_path)
+        except subprocess.CalledProcessError as exc:
+            LOG.warning(
+                "Word couldn't convert %s to PDF (%s). Make sure Microsoft Word is "
+                "installed and not blocked by a dialog box. Leaving original file.",
+                path.name,
+                (exc.stderr or str(exc)).strip(),
+            )
+            return path
+    else:
+        try:
+            from docx2pdf import convert
+        except ImportError:
+            LOG.warning(
+                "docx2pdf isn't installed (pip install docx2pdf), so %s couldn't be "
+                "converted to PDF.",
+                path.name,
+            )
+            return path
+        try:
+            convert(str(path), str(pdf_path))
+        except Exception as exc:  # noqa: BLE001 - docx2pdf raises platform-specific errors
+            LOG.warning(
+                "Word couldn't convert %s to PDF (%s). Make sure Microsoft Word is "
+                "installed and not blocked by a dialog box. Leaving original file.",
+                path.name,
+                exc,
+            )
+            return path
 
     if not pdf_path.exists():
         LOG.warning("Expected %s after conversion but it wasn't created; leaving original file.", pdf_path.name)
