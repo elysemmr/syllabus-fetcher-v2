@@ -59,10 +59,11 @@ other settings, edit `config.json` directly (copy `config.example.json` to
 - `student_role_id` — optional, only used by `--requester`. Speeds up
   looking up someone's enrollment log by asking Brightspace to only return
   their student-role courses server-side, instead of fetching every course
-  they have any role on (slow for admin/staff accounts). Leave `null` to
-  find it out: run once, and if it's unset the log prints a tip suggesting
-  a value based on the roles it actually saw among the account's student
-  enrollments -- paste that number in.
+  the account has any role on (slow for admin/staff accounts). This applies
+  to any `--requester` username, not just your own, since it's the
+  institution-wide role ID for "Student," not something tied to a
+  particular person. Filled in automatically the first time `--requester`
+  runs while it's `null` -- no manual editing needed.
 
 ## Usage
 

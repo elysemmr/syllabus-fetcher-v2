@@ -595,7 +595,7 @@ def get_user_enrollments(
     lp_version: str,
     user_id: int,
     student_role_id: int | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], dict[int, str]]:
     """Fetch every course (org unit) a given user is enrolled in *as a
     student*, as a list of {"Id", "Code", "Name"} dicts, via the
     admin-level enrollments API. Each enrollment also carries a Role (e.g.
@@ -605,7 +605,11 @@ def get_user_enrollments(
     API itself is asked to only return that role, which is much faster for
     an account with access to many/all courses (e.g. an admin account) --
     otherwise every enrollment has to be fetched and filtered by role name
-    here instead, which means paging through all of them."""
+    here instead, which means paging through all of them.
+
+    Also returns whatever {role id: role name} pairs were seen among the
+    student-role enrollments, so the caller can save student_role_id to
+    config.json automatically when it wasn't already set."""
     enrollments: list[dict] = []
     skipped_non_student = 0
     seen_roles: dict[int, str] = {}
@@ -659,14 +663,8 @@ def get_user_enrollments(
 
     if skipped_non_student:
         LOG.debug("Skipped %d non-student-role enrollment(s) for user %s.", skipped_non_student, user_id)
-    if student_role_id is None and seen_roles:
-        LOG.info(
-            "Tip: add \"student_role_id\": %s to config.json to skip scanning every course next time "
-            "(role id -> name seen among this account's student enrollments: %s).",
-            next(iter(seen_roles)), seen_roles,
-        )
     LOG.debug("Fetched %d student course enrollments for user %s.", len(enrollments), user_id)
-    return enrollments
+    return enrollments, seen_roles
 
 
 MAX_SECTIONS_TO_TRY = 6
@@ -910,11 +908,19 @@ def run_for_requester(
     allow_other_sections: bool = False,
     guess_newest: bool = False,
     student_role_id: int | None = None,
+    config: dict | None = None,
+    config_path: Path | None = None,
 ) -> dict[str, str]:
     """Resolve a batch of loosely-formatted course descriptions against a
     specific person's real enrollment log (by username), then download each
     matched course's syllabus -- entirely via Brightspace's API, using the
-    logged-in admin account's own read access. No browser clicking."""
+    logged-in admin account's own read access. No browser clicking.
+
+    If student_role_id wasn't already set and config/config_path are given,
+    the student role id discovered from this run's results is saved to
+    config.json automatically, so future runs (for any username) skip
+    straight to a server-side-filtered lookup instead of scanning every
+    course the account has any role on."""
     results: dict[str, str] = {}
 
     lp_version = api_versions.get("lp")
@@ -928,7 +934,21 @@ def run_for_requester(
         LOG.error("Couldn't find a Brightspace user with username %r.", username)
         return {d: f"FAILED: user {username!r} not found" for d in descriptions}
 
-    enrollments = get_user_enrollments(context, base_url, lp_version, user_id, student_role_id)
+    enrollments, seen_roles = get_user_enrollments(context, base_url, lp_version, user_id, student_role_id)
+    if student_role_id is None and seen_roles and config is not None and config_path is not None:
+        discovered_id = next(iter(seen_roles))
+        if len(seen_roles) > 1:
+            LOG.warning(
+                "Saw more than one student-like role (%s); saving %s as student_role_id -- "
+                "edit config.json if that's the wrong one.", seen_roles, discovered_id,
+            )
+        config["student_role_id"] = discovered_id
+        config_path.write_text(json.dumps(config, indent=2))
+        LOG.info(
+            "Saved student_role_id=%s (%r) to %s -- future --requester runs will skip straight to "
+            "a filtered lookup instead of scanning every course.",
+            discovered_id, seen_roles[discovered_id], config_path,
+        )
     LOG.info("Found %d courses in %s's enrollment log.", len(enrollments), username)
     if not enrollments:
         return {d: f"FAILED: no enrollments found for {username!r}" for d in descriptions}
@@ -1524,7 +1544,8 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    config = load_config(Path(args.config).expanduser())
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
     course_codes = read_course_codes(args)
     output_dir = Path(args.output_dir).expanduser() if args.output_dir else (
         Path(config["output_dir"]).expanduser() if config.get("output_dir") else DEFAULT_OUTPUT_DIR
@@ -1561,6 +1582,8 @@ def main(argv: list[str] | None = None) -> int:
                 allow_other_sections=args.allow_other_sections,
                 guess_newest=args.guess_newest,
                 student_role_id=config.get("student_role_id"),
+                config=config,
+                config_path=config_path,
             )
         else:
             for course_code in course_codes:

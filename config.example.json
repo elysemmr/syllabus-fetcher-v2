@@ -9,6 +9,6 @@
   "_output_dir_comment": "Where downloaded syllabi land. Defaults to ~/Desktop/Syllabi if omitted or null.",
   "output_dir": null,
 
-  "_student_role_id_comment": "Optional, for --requester. Speeds up looking up someone's enrollment log by asking Brightspace to only return their student-role courses server-side, instead of fetching every course they have any role on (slow for admin/staff accounts). Leave null to find it out: run once against any account, and if it's unset the log will print a tip suggesting a student_role_id value based on the roles it saw -- paste that number in here.",
+  "_student_role_id_comment": "Optional, for --requester. Speeds up looking up someone's enrollment log by asking Brightspace to only return their student-role courses server-side, instead of fetching every course they have any role on (slow for admin/staff accounts). Filled in automatically the first time --requester runs while this is null -- no manual editing needed.",
   "student_role_id": null
 }
