@@ -956,9 +956,37 @@ def run_for_requester(
     return results
 
 
+def _prompt_for_base_url_mac() -> str | None:
+    """Ask for the login URL via a native AppleScript dialog.
+
+    A Tk window launched from a background Terminal process often isn't
+    given real keyboard focus on macOS -- it appears but keystrokes go to
+    Terminal instead. osascript's own dialog is always frontmost and
+    focused, so use that instead of Tkinter here.
+    """
+    script = (
+        "display dialog \"Enter your school's MyFire/Brightspace login URL "
+        '(e.g. https://myfire.seu.edu):" default answer "" '
+        'with title "Brightspace login URL"'
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+    match = re.search(r"text returned:(.*)\Z", result.stdout.strip())
+    return match.group(1).strip() if match and match.group(1).strip() else None
+
+
 def prompt_for_base_url() -> str | None:
     """Pop up a small dialog asking for the Brightspace login URL. Returns
-    None (never raises) if tkinter isn't available or the user cancels."""
+    None (never raises) if no GUI prompt is available or the user cancels."""
+    if sys.platform == "darwin":
+        return _prompt_for_base_url_mac()
     try:
         import tkinter as tk
         from tkinter import simpledialog
