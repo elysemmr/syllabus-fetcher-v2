@@ -11,6 +11,11 @@ login step needs a real window you can click through.
 
 ## Setup (one time)
 
+**Windows:** double-click `setup.bat` (or run it from a terminal). It creates
+the virtual environment and installs everything for you.
+
+**Manual (any OS):**
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
