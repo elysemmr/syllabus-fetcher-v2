@@ -14,6 +14,9 @@ login step needs a real window you can click through.
 **Windows:** double-click `setup.bat` (or run it from a terminal). It creates
 the virtual environment and installs everything for you.
 
+**Mac:** double-click `setup.command` in Finder (or run it from a terminal).
+Same thing — creates the virtual environment and installs everything.
+
 **Manual (any OS):**
 
 ```bash
