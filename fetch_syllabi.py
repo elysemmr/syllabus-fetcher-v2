@@ -185,15 +185,18 @@ def find_org_unit_id_via_api(
     context: BrowserContext, base_url: str, api_versions: dict[str, str], course_code: str
 ) -> int | None:
     """Look a course up in the user's own enrollment list when the
-    course-selector UI can't find it (it doesn't list older courses). Only
-    an exact match counts -- on the code, or on the name once trailing
-    whitespace is trimmed, allowing the given text to be a prefix that ends
-    at a "_" boundary -- and only if it identifies exactly one course.
-    Returns None (never raises) otherwise."""
+    course-selector UI can't find it (it doesn't list older courses).
+    Matches if the given text appears anywhere in the real code or name,
+    ignoring separators/casing -- so "ENGL_2133_31_FX" finds
+    "2026_US_ENGL_2133_31_FX_BSIDE" without needing the year or site suffix
+    typed out too -- and only if it identifies exactly one course. Returns
+    None (never raises) otherwise."""
     lp_version = api_versions.get("lp")
     if not lp_version:
         return None
-    target = course_code.strip().strip("_- ").lower()  # a code cut off at a "_" still matches
+    target = normalize_code(course_code)
+    if not target:
+        return None
     try:
         enrollments = _all_course_enrollments(context, base_url, lp_version)
     except Exception:  # noqa: BLE001 - best-effort
@@ -201,8 +204,7 @@ def find_org_unit_id_via_api(
         return None
 
     def matches(text: str) -> bool:
-        text = text.strip().lower()
-        return text == target or text.startswith(target + "_")
+        return target in normalize_code(text)
 
     hits = {
         org_unit_id: (code, name.strip())
@@ -952,18 +954,43 @@ def run_for_requester(
     return results
 
 
+def prompt_for_base_url() -> str | None:
+    """Pop up a small dialog asking for the Brightspace login URL. Returns
+    None (never raises) if tkinter isn't available or the user cancels."""
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+    except ImportError:
+        return None
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    url = simpledialog.askstring(
+        "Brightspace login URL",
+        "Enter your school's MyFire/Brightspace login URL\n(e.g. https://myfire.seu.edu):",
+        parent=root,
+    )
+    root.destroy()
+    return url.strip() if url and url.strip() else None
+
+
 def load_config(path: Path) -> dict:
-    if not path.exists():
-        LOG.error(
-            "Config file not found at %s.\n"
-            "Copy config.example.json to config.json and fill in base_url first.",
-            path,
-        )
-        sys.exit(1)
-    config = json.loads(path.read_text())
+    if path.exists():
+        config = json.loads(path.read_text())
+    else:
+        config = {"home_url_fragment": "/d2l/home", "output_dir": None}
+
     if not config.get("base_url") or config["base_url"].startswith("REPLACE-"):
-        LOG.error("config.json's base_url is not set. Edit config.json and try again.")
-        sys.exit(1)
+        url = prompt_for_base_url()
+        if not url:
+            LOG.error(
+                "No login URL entered. Edit %s and set base_url, then run again.", path,
+            )
+            sys.exit(1)
+        config["base_url"] = url
+        path.write_text(json.dumps(config, indent=2))
+        LOG.info("Saved login URL to %s.", path)
+
     return config
 
 

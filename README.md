@@ -15,7 +15,6 @@ login step needs a real window you can click through.
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp config.example.json config.json
 ```
 
 The script drives your actual installed Google Chrome (via Playwright's
@@ -28,15 +27,21 @@ sure Word is installed and not blocked by a dialog box when the script runs.
 Windows and macOS only. If Word isn't available, the script still downloads
 the file but leaves it in its original format and warns you.
 
-Edit `config.json`:
+The first time you run the script, if `config.json` doesn't exist yet or has
+no login URL saved, a small popup asks for your MyFire/Brightspace login URL
+(the page you'd normally open in a browser to log in) and saves it to
+`config.json` automatically — no manual editing needed, and you won't be
+asked again on later runs. `config.json` is gitignored, since it holds your
+personal login URL.
 
-- `base_url` — the URL that starts your MyFire/Brightspace SSO login (the
-  page you'd normally open in a browser to log in).
+To set it (or change it) without waiting for the popup, or to adjust the
+other settings, edit `config.json` directly (copy `config.example.json` to
+`config.json` first if it doesn't exist):
+
+- `base_url` — the URL that starts your MyFire/Brightspace SSO login.
 - `home_url_fragment` — a substring of the URL Brightspace lands you on once
   login succeeds (default `/d2l/home`). Used to detect that login finished.
 - `output_dir` — optional; defaults to `~/Desktop/Syllabi` if left `null`.
-
-`config.json` is gitignored, since it may reflect your personal login URL.
 
 ## Usage
 
