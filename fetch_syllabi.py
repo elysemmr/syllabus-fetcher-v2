@@ -183,6 +183,38 @@ def _all_course_enrollments(
     return enrollments
 
 
+def _search_courses_by_code(
+    context: BrowserContext, base_url: str, lp_version: str, code: str, exact: bool = False
+) -> list[tuple[int, str, str]] | None:
+    """Course offerings whose code contains `code` (or equals it, if exact),
+    matched by Brightspace itself via the org structure API -- a single fast
+    request instead of paging through every enrollment. Same (id, code, name)
+    tuples as _all_course_enrollments. Returns None (never raises) if the
+    request fails, so callers can fall back to the full enrollment scan."""
+    root = base_url.rstrip("/")
+    params = {"orgUnitType": "3", "exactOrgUnitCode" if exact else "orgUnitCode": code}
+    found: list[tuple[int, str, str]] = []
+    try:
+        for _ in range(50):  # safety cap on pagination
+            resp = context.request.get(
+                f"{root}/d2l/api/lp/{lp_version}/orgstructure/", params=params, timeout=30_000
+            )
+            if resp.status != 200:
+                LOG.debug("Org structure search for %r returned HTTP %d.", code, resp.status)
+                return None
+            data = resp.json()
+            for item in data.get("Items", []):
+                if item.get("Identifier") is not None:
+                    found.append((int(item["Identifier"]), item.get("Code") or "", item.get("Name") or ""))
+            paging = data.get("PagingInfo") or {}
+            if not paging.get("HasMoreItems"):
+                return found
+            params = {**params, "bookmark": paging["Bookmark"]}
+    except Exception:  # noqa: BLE001 - best-effort
+        LOG.debug("Org structure search for %r failed.", code, exc_info=True)
+    return None
+
+
 def find_org_unit_id_via_api(
     context: BrowserContext, base_url: str, api_versions: dict[str, str], course_code: str
 ) -> int | None:
@@ -716,18 +748,25 @@ def find_master_course(
     lp_version = api_versions.get("lp")
     if not codes or not lp_version:
         return []
-    try:
-        enrollments = _all_course_enrollments(context, base_url, lp_version)
-    except Exception:  # noqa: BLE001 - best-effort
-        LOG.debug("Couldn't list the logged-in account's enrollments.", exc_info=True)
-        return []
+    # Ask Brightspace for each exact master code (fast); only if that request
+    # itself fails, fall back to scanning the account's whole enrollment list.
+    searched = {code: _search_courses_by_code(context, base_url, lp_version, code, exact=True) for code in codes}
+    enrollments: list[tuple[int, str, str]] = []
+    if any(result is None for result in searched.values()):
+        try:
+            enrollments = _all_course_enrollments(context, base_url, lp_version)
+        except Exception:  # noqa: BLE001 - best-effort
+            LOG.debug("Couldn't list the logged-in account's enrollments.", exc_info=True)
+            return []
     masters: list[dict] = []
     for code in codes:
         wanted = normalize_code(code)
         found = sorted(
             (
                 {"Id": org_unit_id, "Code": found_code, "Name": name, "_master": True}
-                for org_unit_id, found_code, name in enrollments
+                for org_unit_id, found_code, name in (
+                    searched[code] if searched[code] is not None else enrollments
+                )
                 if normalize_code(found_code) == wanted
             ),
             key=lambda org_unit: org_unit["Id"],
@@ -770,11 +809,18 @@ def find_default_course_candidates(
     lp_version = api_versions.get("lp")
     if not bare or not lp_version:
         return candidates
-    try:
-        enrollments = _all_course_enrollments(context, base_url, lp_version)
-    except Exception:  # noqa: BLE001 - best-effort
-        LOG.debug("Couldn't list the logged-in account's enrollments.", exc_info=True)
-        return candidates
+    # Server-side substring search on "DEPT_1234" first. Fall back to the
+    # full enrollment scan if that fails or finds nothing (e.g. a code that
+    # uses a separator other than "_").
+    enrollments = _search_courses_by_code(
+        context, base_url, lp_version, f"{bare.group(1).upper()}_{bare.group(2)}"
+    )
+    if not enrollments:
+        try:
+            enrollments = _all_course_enrollments(context, base_url, lp_version)
+        except Exception:  # noqa: BLE001 - best-effort
+            LOG.debug("Couldn't list the logged-in account's enrollments.", exc_info=True)
+            return candidates
     # The department can't sit inside a longer word, nor the number run on
     # into more digits ("ABCD 1234" is not "ABCD_12345").
     this_course = re.compile(rf"(?<![A-Za-z]){bare.group(1)}[\s_-]*{bare.group(2)}(?!\d)", re.IGNORECASE)
