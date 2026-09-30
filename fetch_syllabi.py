@@ -589,6 +589,13 @@ def find_user_id_by_username(context: BrowserContext, base_url: str, lp_version:
     return user_id
 
 
+# Brightspace role names are institution-specific -- some schools rename the
+# base student role to "Learner" instead of keeping "Student". Used only to
+# bootstrap student_role_id on the very first --requester run at a school;
+# every run after that uses the discovered numeric id instead of name-matching.
+STUDENT_ROLE_NAME_HINTS = ("student", "learner")
+
+
 def get_user_enrollments(
     context: BrowserContext,
     base_url: str,
@@ -642,7 +649,7 @@ def get_user_enrollments(
                 continue
             role = item.get("Role") or {}
             role_name = role.get("Name") or ""
-            is_student_role = "student" in role_name.lower()
+            is_student_role = any(hint in role_name.lower() for hint in STUDENT_ROLE_NAME_HINTS)
             # The server already filtered by role when student_role_id was
             # given, so only re-check the role name as a safety net here.
             if student_role_id is None and role_name and not is_student_role:
