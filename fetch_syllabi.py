@@ -614,6 +614,12 @@ def get_user_enrollments(context: BrowserContext, base_url: str, lp_version: str
             LOG.debug("Enrollment fetch for user %s failed.", user_id, exc_info=True)
             break
 
+        if page_num == 0 and data.get("Items"):
+            # One-off dump so we can see whether this API response carries a
+            # role field per enrollment (needed to filter out non-student
+            # roles like TA/admin) -- remove once that's settled.
+            LOG.debug("Sample enrollment item shape: %s", json.dumps(data["Items"][0], indent=2))
+
         for item in data.get("Items", []):
             org_unit = item.get("OrgUnit") or {}
             if org_unit.get("Id"):
