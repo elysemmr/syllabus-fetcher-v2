@@ -417,26 +417,35 @@ def find_syllabus_via_api(
     )
 
     # Fast path: a topic whose own title says "syllabus" -- an uploaded file,
-    # or a Link topic wrapping a file or a Google Doc.
-    for topic in topics:
-        if SYLLABUS_RE.search(topic.get("Title") or ""):
-            LOG.debug(
-                "Topic title matches 'syllabus' directly: %r (in %r)",
-                topic.get("Title"), topic.get("ModulePath"),
-            )
-            source_notes: list[str] = []
-            result = (
-                _fetch_topic_file(context, base_url, le_version, org_unit_id, topic)
-                or _download_from_topic_url(context, base_url, topic, source_notes)
-            )
-            if result:
-                _source_note[org_unit_id] = "; ".join(source_notes)
-                LOG.info("Syllabus is the topic %r (in %r).", topic.get("Title"), topic.get("ModulePath"))
-                if source_notes:
-                    LOG.info("Note: %s.", "; ".join(source_notes))
-                return result
-            LOG.debug("Fetching topic file for %r failed.", topic.get("Title"))
-            undownloadable.append(topic.get("Title") or "")
+    # or a Link topic wrapping a file or a Google Doc. Failing that, an
+    # uploaded file inside a module named "syllabus", whatever its own title
+    # ("BUSI 3103 Welch SPRING 26.docx"); only File topics, so the other
+    # links such a module often holds (surveys, acknowledgements) aren't taken.
+    title_matches = [topic for topic in topics if SYLLABUS_RE.search(topic.get("Title") or "")]
+    module_matches = [
+        topic for topic in topics
+        if topic not in title_matches
+        and (topic.get("TypeIdentifier") or "").lower() == "file"
+        and SYLLABUS_RE.search(topic.get("ModulePath") or "")
+    ]
+    for topic in title_matches + module_matches:
+        LOG.debug(
+            "Topic %s matches 'syllabus' directly: %r (in %r)",
+            "title" if topic in title_matches else "module", topic.get("Title"), topic.get("ModulePath"),
+        )
+        source_notes: list[str] = []
+        result = (
+            _fetch_topic_file(context, base_url, le_version, org_unit_id, topic)
+            or _download_from_topic_url(context, base_url, topic, source_notes)
+        )
+        if result:
+            _source_note[org_unit_id] = "; ".join(source_notes)
+            LOG.info("Syllabus is the topic %r (in %r).", topic.get("Title"), topic.get("ModulePath"))
+            if source_notes:
+                LOG.info("Note: %s.", "; ".join(source_notes))
+            return result
+        LOG.debug("Fetching topic file for %r failed.", topic.get("Title"))
+        undownloadable.append(topic.get("Title") or "")
 
     # A syllabus link in a module's description, which is already in the TOC.
     for module_path, description_html in _iter_module_descriptions(modules):
