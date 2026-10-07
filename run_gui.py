@@ -12,6 +12,7 @@ Usage: double-click run_gui.bat (Windows) or run_gui.command (Mac), or run
 
 from __future__ import annotations
 
+import os
 import queue
 import subprocess
 import sys
@@ -24,6 +25,33 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 PROJECT_DIR = Path(__file__).resolve().parent
 SCRIPT_PATH = PROJECT_DIR / "fetch_syllabi.py"
 DEFAULT_OUTPUT_DIR = Path.home() / "Desktop" / "Syllabi"
+
+
+def _activate_mac_window() -> None:
+    """Force this process to the front on macOS.
+
+    When Tkinter is launched via a script (e.g. run_gui.command running
+    through Terminal) rather than typed directly into a Terminal prompt,
+    macOS's old bundled Tk often fails to activate the window as a proper
+    foreground app: it draws blank and ignores clicks/keystrokes until
+    something forces a redraw. Explicitly activating via osascript is the
+    standard workaround.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        subprocess.run(
+            [
+                "osascript", "-e",
+                f'tell application "System Events" to set frontmost of first process '
+                f'whose unix id is {os.getpid()} to true',
+            ],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+    except OSError:
+        pass
 
 
 def venv_python() -> str:
@@ -233,6 +261,11 @@ class App:
 def main() -> None:
     root = tk.Tk()
     App(root)
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(200, lambda: root.attributes("-topmost", False))
+    root.focus_force()
+    _activate_mac_window()
     root.mainloop()
 
 
