@@ -67,6 +67,18 @@ other settings, edit `config.json` directly (copy `config.example.json` to
 
 ## Usage
 
+### Point-and-click (no terminal needed)
+
+Double-click `run_gui.bat` (Windows) or `run_gui.command` (Mac) -- same
+one-time `setup.bat`/`setup.command` step applies first. It opens a small
+window where you type or paste a course list (one per line, or load one
+from a file), optionally fill in a requester's username, pick the output
+folder, and click Run. A Chrome window still opens separately for you to
+log in, and the log pane shows the same progress/output the terminal
+version prints.
+
+### Command line
+
 ```bash
 python fetch_syllabi.py --courses CSE201,MATH150,ENGL101
 # or

@@ -26,8 +26,9 @@ if [ $? -ne 0 ]; then
 fi
 
 echo
-echo "Setup complete. To run the script, open a new Terminal window in this"
-echo "folder and use:"
+echo "Setup complete. Easiest way to run it: double-click run_gui.command."
+echo
+echo "Or from a terminal:"
 echo "  source .venv/bin/activate"
 echo "  python fetch_syllabi.py --courses CSE201,MATH150"
 echo

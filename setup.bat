@@ -27,7 +27,9 @@ if errorlevel 1 (
 )
 
 echo.
-echo Setup complete. To run the script, open a new terminal in this folder and use:
+echo Setup complete. Easiest way to run it: double-click run_gui.bat.
+echo.
+echo Or from a terminal:
 echo   .venv\Scripts\activate
 echo   python fetch_syllabi.py --courses CSE201,MATH150
 echo.
