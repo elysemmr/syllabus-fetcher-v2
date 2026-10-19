@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -34,8 +35,10 @@ from collections.abc import Callable
 from html import unescape
 from pathlib import Path
 from urllib.parse import unquote
+from urllib.request import urlopen
 
 from playwright.sync_api import (
+    Error as PlaywrightError,
     BrowserContext,
     Download,
     Locator,
@@ -1187,6 +1190,83 @@ def first_matching_locator(page: Page, selectors: list[str], timeout_ms: int = 3
     return None
 
 
+def try_microsoft_sso(page: Page, home_url_fragment: str, wait_ms: int = 20000) -> bool:
+    """If we land on a Microsoft sign-in page that already knows an account
+    (SSO extension or a saved session), click through it without user input.
+    Returns True once the post-login page is reached."""
+    deadline = time.monotonic() + wait_ms / 1000
+    clicked = False
+    while time.monotonic() < deadline:
+        if home_url_fragment in page.url:
+            return True
+        if "login.microsoftonline.com" in page.url and not clicked:
+            for sel in ("div[data-test-id][role='button']", "#tilesHolder .tile-container [role='button']",
+                        "div.table[role='button']", "#idSIButton9"):
+                try:
+                    loc = page.locator(sel).first
+                    if loc.is_visible():
+                        LOG.info("Microsoft already knows you -- picking the saved account.")
+                        loc.click()
+                        clicked = True
+                        break
+                except PlaywrightError:
+                    pass
+        page.wait_for_timeout(500)
+    return home_url_fragment in page.url
+
+
+CDP_PORT = 9333
+
+
+def chrome_path() -> str:
+    candidates = {
+        "darwin": ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+        "win32": [
+            str(Path(os.environ.get(v, "")) / "Google/Chrome/Application/chrome.exe")
+            for v in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
+        ],
+    }.get(sys.platform, ["/usr/bin/google-chrome"])
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    LOG.error("Couldn't find Google Chrome. Install it and try again.")
+    sys.exit(1)
+
+
+def launch_plain_chrome(headless: bool) -> subprocess.Popen:
+    cmd = [chrome_path(), f"--user-data-dir={SESSION_DIR}", f"--remote-debugging-port={CDP_PORT}",
+           "--no-first-run", "--no-default-browser-check", "about:blank"]
+    if headless:
+        cmd.insert(1, "--headless=new")
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(40):
+        try:
+            urlopen(f"http://127.0.0.1:{CDP_PORT}/json/version", timeout=1)
+            return proc
+        except OSError:
+            time.sleep(0.5)
+    proc.terminate()
+    LOG.error("Chrome didn't start. Close any Chrome window using the script's profile and retry.")
+    sys.exit(1)
+
+
+SSO_EXTENSION_URL = "https://chromewebstore.google.com/detail/ppnbnpeolgkicgegkbkbjmhlideopiji"
+
+
+def offer_sso_extension(context) -> None:
+    """Once per profile, open the Microsoft SSO extension's store page in a
+    second tab. Installing it lets this Chrome profile reuse the device's
+    Entra sign-in (Platform SSO on macOS via Company Portal, or the Windows
+    account on Windows) so later runs skip the login entirely."""
+    marker = SESSION_DIR / ".sso-extension-offered"
+    if marker.exists():
+        return
+    marker.touch()
+    LOG.info("Tip: click 'Add to Chrome' in the new tab (Microsoft Single Sign On) once; "
+             "future runs will sign in automatically.")
+    context.new_page().goto(SSO_EXTENSION_URL)
+
+
 def wait_for_login(page: Page, home_url_fragment: str) -> None:
     LOG.info("=" * 70)
     LOG.info("A browser window has opened.")
@@ -1618,18 +1698,19 @@ def main(argv: list[str] | None = None) -> int:
 
     results: dict[str, str] = {}
 
+    chrome_proc = launch_plain_chrome(args.headless)
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            str(SESSION_DIR),
-            channel="chrome",
-            headless=args.headless,
-            accept_downloads=True,
-        )
+        # Attach to a normally-launched Chrome instead of letting Playwright start
+        # it: Playwright's automation flags stop Microsoft's SSO extension from
+        # reaching the device's Entra sign-in (Platform SSO / Windows account).
+        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}")
+        context = browser.contexts[0]
         page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(NAV_TIMEOUT_MS)
 
         page.goto(config["base_url"])
-        if home_url_fragment not in page.url:
+        if home_url_fragment not in page.url and not try_microsoft_sso(page, home_url_fragment):
+            offer_sso_extension(context)
             wait_for_login(page, home_url_fragment)
 
         api_versions = get_api_versions(context, config["base_url"])
@@ -1670,7 +1751,8 @@ def main(argv: list[str] | None = None) -> int:
                     LOG.exception("Unexpected error on %s", course_code)
                     results[course_code] = f"ERROR: {exc}"
 
-        context.close()
+        browser.close()
+        chrome_proc.terminate()
 
     print()
     print("=" * 70)
