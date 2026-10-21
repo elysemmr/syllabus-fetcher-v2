@@ -607,30 +607,38 @@ def normalize_code(s: str | None) -> str:
 
 
 def find_user_id_by_username(context: BrowserContext, base_url: str, lp_version: str, username: str) -> int | None:
-    """Look up a Brightspace user's internal ID from their username, via the
-    admin-level user search API."""
-    try:
-        resp = context.request.get(
-            f"{base_url.rstrip('/')}/d2l/api/lp/{lp_version}/users/",
-            params={"userName": username},
-        )
-        if resp.status != 200:
-            LOG.debug("User lookup for %r returned HTTP %d: %s", username, resp.status, resp.text()[:500])
-            return None
-        data = resp.json()
-    except Exception:  # noqa: BLE001 - best-effort
-        LOG.debug("User lookup for %r failed.", username, exc_info=True)
-        return None
+    """Look up a Brightspace user's internal ID from a username *or* a school
+    ID number (Brightspace's "OrgDefinedId"), via the admin-level user search
+    API. All-digit input is tried as an ID number first."""
+    params_to_try = [{"userName": username}, {"orgDefinedId": username}]
+    if username.isdigit():
+        params_to_try.reverse()
 
-    # Different API versions return either a single object or a list.
-    if isinstance(data, list):
-        if not data:
-            LOG.debug("No user found for username %r.", username)
-            return None
-        data = data[0]
-    user_id = data.get("UserId") or data.get("Identifier")
-    LOG.debug("Resolved username %r to user ID %s.", username, user_id)
-    return user_id
+    for params in params_to_try:
+        try:
+            resp = context.request.get(f"{base_url.rstrip('/')}/d2l/api/lp/{lp_version}/users/", params=params)
+            if resp.status != 200:
+                LOG.debug("User lookup %s returned HTTP %d: %s", params, resp.status, resp.text()[:500])
+                continue
+            data = resp.json()
+        except Exception:  # noqa: BLE001 - best-effort
+            LOG.debug("User lookup %s failed.", params, exc_info=True)
+            continue
+
+        # Different API versions return a single object, a list, or a paged
+        # {"Items": [...]} wrapper.
+        if isinstance(data, dict) and isinstance(data.get("Items"), list):
+            data = data["Items"]
+        if isinstance(data, list):
+            if not data:
+                LOG.debug("No user found for %s.", params)
+                continue
+            data = data[0]
+        user_id = data.get("UserId") or data.get("Identifier")
+        if user_id:
+            LOG.debug("Resolved %s to user ID %s.", params, user_id)
+            return user_id
+    return None
 
 
 # Brightspace role names are institution-specific -- some schools rename the
@@ -996,7 +1004,7 @@ def run_for_requester(
 
     user_id = find_user_id_by_username(context, base_url, lp_version, username)
     if user_id is None:
-        LOG.error("Couldn't find a Brightspace user with username %r.", username)
+        LOG.error("Couldn't find a Brightspace user with username or ID number %r.", username)
         return {d: f"FAILED: user {username!r} not found" for d in descriptions}
 
     enrollments, seen_roles = get_user_enrollments(context, base_url, lp_version, user_id, student_role_id)

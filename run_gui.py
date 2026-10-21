@@ -89,7 +89,7 @@ class App:
         top.columnconfigure(0, weight=1)
 
         ttk.Label(
-            top, text="Fetching for someone else? Their Brightspace username (leave blank for your own courses):"
+            top, text="Fetching for someone else? Their Brightspace username or ID number (leave blank for your own courses):"
         ).grid(row=0, column=0, sticky="w")
         self.requester_var = tk.StringVar()
         ttk.Entry(top, textvariable=self.requester_var).grid(row=1, column=0, sticky="we", pady=(0, 8))
@@ -236,6 +236,7 @@ class App:
 
     def _on_process_done(self) -> None:
         self.process = None
+        self._open_output_folder()
         self.run_button.configure(state="normal")
         self.cancel_button.configure(state="disabled")
         if self.temp_courses_file is not None and self.temp_courses_file.exists():
@@ -244,6 +245,20 @@ class App:
             except OSError:
                 pass
             self.temp_courses_file = None
+
+    def _open_output_folder(self) -> None:
+        folder = Path(self.output_dir_var.get().strip() or DEFAULT_OUTPUT_DIR).expanduser()
+        if not folder.is_dir():
+            return
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            elif sys.platform == "win32":
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except OSError:
+            pass
 
     def _on_cancel(self) -> None:
         if self.process is not None:
